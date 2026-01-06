@@ -117,56 +117,128 @@ def extract_features(p: Pillars) -> Dict[str, Any]:
 # =========================
 # 3) 规则引擎（IF → THEN + evidence）
 # =========================
-RULES: List[Dict[str, Any]] = [
-    {
-        "id": "R002",
-        "title": "伤官出现（时干）",
-        "if": {"type": "ten_god_eq", "position": "时干", "value": "伤官"},
-        "then": {"message": "时干见伤官，常被解读为表达与创造的驱动力较强，但也可能带来与规范/权威的张力。"}
-    },
-    {
-        "id": "R003",
-        "title": "七杀较多（藏干）",
-        "if": {"type": "canggan_tg_ge", "value": "七杀", "count": 2},
-        "then": {"message": "藏干中七杀出现次数较多，解释上可讨论压力/竞争情境中的行动策略，以及风险与纪律的平衡。"}
-    },
+RULES = [
+    # --- 五行：区间标签（低/中/高）---
+    {"id":"W01", "title":"木元素水平", "if":{"type":"wuxing_band","element":"木"}, "then":{}},
+    {"id":"W02", "title":"火元素水平", "if":{"type":"wuxing_band","element":"火"}, "then":{}},
+    {"id":"W03", "title":"土元素水平", "if":{"type":"wuxing_band","element":"土"}, "then":{}},
+    {"id":"W04", "title":"金元素水平", "if":{"type":"wuxing_band","element":"金"}, "then":{}},
+    {"id":"W05", "title":"水元素水平", "if":{"type":"wuxing_band","element":"水"}, "then":{}},
+
+    # --- 十神：在四柱天干中的出现强度（0/1/2/3/4 -> 低/中/高）---
+    {"id":"T01", "title":"十神分布强度（天干）", "if":{"type":"ten_god_band_all_gans"}, "then":{}},
+
+    # --- 藏干十神：出现强度（0/1/2+ -> 无/低/高）---
+    {"id":"C01", "title":"藏干十神强度（Top）", "if":{"type":"canggan_top_band","topk":5}, "then":{}},
 ]
 
-def eval_rules(features: Dict[str, Any]) -> List[Dict[str, Any]]:
-    hits = []
+def _band_wuxing(count: int) -> str:
+    # 这里的阈值是“示范版”，你后面可以根据样例分布再校准
+    # 天干4 + 藏干(最多~8) → 总量常在 10~14 附近波动
+    if count <= 2:
+        return "low"
+    elif count <= 4:
+        return "medium"
+    else:
+        return "high"
 
-    tg_counter: Dict[str,int] = {}
-    for z, cg, tg in features["canggan_ten_gods"]:
-        tg_counter[tg] = tg_counter.get(tg, 0) + 1
+def _band_count_0_1_2plus(count: int) -> str:
+    if count == 0:
+        return "none"
+    elif count == 1:
+        return "low"
+    else:
+        return "high"
+
+def _band_count_0_1_2_3plus(count: int) -> str:
+    if count == 0:
+        return "none"
+    elif count == 1:
+        return "low"
+    elif count == 2:
+        return "medium"
+    else:
+        return "high"
+
+def eval_rules(features: Dict[str, Any]) -> List[Dict[str, Any]]:
+    hits: List[Dict[str, Any]] = []
+
+    wux = features["wuxing_counts"]
+    ten_gans = features["ten_gods_gan"]
+    canggan = features["canggan_ten_gods"]
+
+    # 统计：天干十神（不含“日主”）
+    tg_gan_counter: Dict[str, int] = {}
+    for pos, tg in ten_gans.items():
+        if tg == "日主":
+            continue
+        tg_gan_counter[tg] = tg_gan_counter.get(tg, 0) + 1
+
+    # 统计：藏干十神
+    tg_cg_counter: Dict[str, int] = {}
+    for z, cg, tg in canggan:
+        tg_cg_counter[tg] = tg_cg_counter.get(tg, 0) + 1
 
     for r in RULES:
         cond = r["if"]
-        ok = False
-        evidence = {}
 
-        if cond["type"] == "ten_god_eq":
-            pos = cond["position"]
-            expected = cond["value"]
-            actual = features["ten_gods_gan"].get(pos)
-            ok = (actual == expected)
-            evidence = {"position": pos, "actual": actual, "expected": expected}
+        # --- 五行区间 ---
+        if cond["type"] == "wuxing_band":
+            e = cond["element"]
+            cnt = int(wux.get(e, 0))
+            band = _band_wuxing(cnt)
 
-        elif cond["type"] == "canggan_tg_ge":
-            tg = cond["value"]
-            threshold = cond["count"]
-            actual = tg_counter.get(tg, 0)
-            ok = actual >= threshold
-            evidence = {"ten_god": tg, "count": actual, "threshold": threshold}
+            msg_map = {
+                "low":    f"{e}元素偏低（low）。在形式化系统中，这被标记为结构性弱项，需要依赖其他结构（如十神/组合）补足语义。",
+                "medium": f"{e}元素处于中等水平（medium）。说明该维度未呈现强烈偏向，解释更依赖语境参数与组合规则。",
+                "high":   f"{e}元素偏高（high）。在规则系统中可作为显著偏向维度，用于触发更强约束的解释路径。"
+            }
 
-        if ok:
             hits.append({
                 "rule_id": r["id"],
                 "title": r["title"],
-                "message": r["then"]["message"],
-                "evidence": evidence
+                "message": msg_map[band],
+                "evidence": {"element": e, "count": cnt, "band": band}
             })
+            continue
+
+        # --- 天干十神：全部输出强度表（永远有输出）---
+        if cond["type"] == "ten_god_band_all_gans":
+            # 对常见十神集合做一个完整表，保证“没出现”也会显示 none
+            all_tg = ["比肩","劫财","食神","伤官","偏财","正财","七杀","正官","偏印","正印"]
+            band_table = {}
+            for tg in all_tg:
+                c = tg_gan_counter.get(tg, 0)
+                band_table[tg] = {"count": c, "band": _band_count_0_1_2_3plus(c)}
+
+            hits.append({
+                "rule_id": r["id"],
+                "title": r["title"],
+                "message": "天干十神分布以区间标签表示（none/low/medium/high），用于展示哪些解释维度在结构层面更突出。",
+                "evidence": {"ten_god_gans": band_table}
+            })
+            continue
+
+        # --- 藏干十神：TopK 输出（永远有输出）---
+        if cond["type"] == "canggan_top_band":
+            topk = int(cond.get("topk", 5))
+            sorted_items = sorted(tg_cg_counter.items(), key=lambda x: x[1], reverse=True)
+            top_items = sorted_items[:topk]
+
+            out = []
+            for tg, c in top_items:
+                out.append({"ten_god": tg, "count": c, "band": _band_count_0_1_2plus(c)})
+
+            hits.append({
+                "rule_id": r["id"],
+                "title": r["title"],
+                "message": f"藏干十神按出现频次排序，输出 Top {topk} 并给出区间标签（none/low/high）。",
+                "evidence": {"top": out}
+            })
+            continue
 
     return hits
+
 
 
 # =========================
