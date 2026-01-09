@@ -387,7 +387,7 @@ if run:
         "rule_hits": rule_hits
     }
 
-    st.subheader("Interpretation (paragraph narrative)")
+    st.subheader("Interpretation")
     interpretation_text = generate_interpretation_text(pillars, features, rule_hits)
     st.markdown(interpretation_text)
 
@@ -401,3 +401,4 @@ if run:
         file_name="result.json",
         mime="application/json"
     )
+
