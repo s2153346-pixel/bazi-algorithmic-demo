@@ -411,7 +411,7 @@ if run:
     st.markdown(interpretation_text)
 
     with st.expander("Show computational details (Four Pillars / Features / Rules)"):
-        st.json(result, expanded=Ture)
+        st.json(result, expanded=True)
 
     st.subheader("Download JSON output")
     st.download_button(
@@ -420,4 +420,5 @@ if run:
         file_name="result.json",
         mime="application/json"
     )
+
 
