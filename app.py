@@ -2,11 +2,12 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, date as _date, time as _time
 from typing import Any, Dict, List, Tuple
+from collections import Counter
 
 import pytz
 import streamlit as st
 from lunar_python import Solar
-from collections import Counter
+
 
 # =========================
 # 1) 四柱计算
@@ -198,33 +199,13 @@ def eval_rules(features: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 # =========================
-# 4) 将结构结果翻译为“段落解释”（主输出）
+# 4) 计算“结构风险档位”
 # =========================
-def generate_interpretation_text(pillars: Pillars, features: Dict[str, Any], rule_hits: List[Dict[str, Any]]) -> str:
-    wx = features["wuxing_counts"]
-    tg_gan = features["ten_gods_gan"]
-
-    # 五行 band 读取（来自 rule_hits）
-    band_map = {}
-    for h in rule_hits:
-        if h.get("rule_id", "").startswith("WUXING-"):
-            e = h["evidence"]["element"]
-            band_map[e] = h["evidence"]["band"]
-
-    def _wx_desc(e: str) -> str:
-        band = band_map.get(e, "medium")
-        if band == "high":
-            return f"{e}偏旺"
-        if band == "low":
-            return f"{e}偏弱"
-        return f"{e}中等"
-   #计算风险档位  
-   
 def _compute_risk_band(features: Dict[str, Any]) -> Tuple[str, Dict[str, int]]:
     """
     返回 (band, evidence_dict)
     band ∈ {"low", "medium", "high"}
-    evidence 包含 stabilizing / tension 的计数，方便以后打印或调试。
+    evidence 包含 stabilizing / tension 的计数。
     """
     tg_gan = features["ten_gods_gan"]          # {'年干': '正官', ...}
     canggan = features["canggan_ten_gods"]     # [('戌','戊','七杀'), ...]
@@ -243,9 +224,8 @@ def _compute_risk_band(features: Dict[str, Any]) -> Tuple[str, Dict[str, int]]:
     tension_set = {"七杀", "正官", "食神", "伤官", "偏财", "正财"}
 
     stabilizing = sum(counter[t] for t in stabilizing_set)
-    tension    = sum(counter[t] for t in tension_set)
+    tension = sum(counter[t] for t in tension_set)
 
-    # 简单的结构档位划分，可以以后根据样本微调
     if tension <= stabilizing:
         band = "low"      # 风险整体可控
     elif tension <= stabilizing + 2:
@@ -261,20 +241,47 @@ def _compute_risk_band(features: Dict[str, Any]) -> Tuple[str, Dict[str, int]]:
     return band, evidence
 
 
+# =========================
+# 5) 将结构结果翻译为“段落解释”
+# =========================
+def generate_interpretation_text(
+    pillars: Pillars,
+    features: Dict[str, Any],
+    rule_hits: List[Dict[str, Any]]
+) -> str:
+    wx = features["wuxing_counts"]
+    tg_gan = features["ten_gods_gan"]
+
+    # 从 rule_hits 里读取五行 band
+    band_map = {}
+    for h in rule_hits:
+        if h.get("rule_id", "").startswith("WUXING-"):
+            e = h["evidence"]["element"]
+            band_map[e] = h["evidence"]["band"]
+
+    def _wx_desc(e: str) -> str:
+        band = band_map.get(e, "medium")
+        if band == "high":
+            return f"{e}偏旺"
+        if band == "low":
+            return f"{e}偏弱"
+        return f"{e}中等"
+
     # 段落 1：结构概览
     p1 = (
-        "从结构配置来看，该命式的五行分布呈现出相对均衡的格局。"
-        f"木、火、土整体处于：{_wx_desc('木')}、{_wx_desc('火')}与{_wx_desc('土')}的范围，"
-        f"而金、水相对而言：{_wx_desc('金')}与{_wx_desc('水')}。"
+        "从结构配置来看，该命式的五行分布大致呈现一个相对均衡的格局："
+        f"木、火、土整体处于{_wx_desc('木')}、{_wx_desc('火')}与{_wx_desc('土')}的范围，"
+        f"而金、水则表现为{_wx_desc('金')}与{_wx_desc('水')}。"
+        "这意味着在资源、行动与情绪流动之间，先天结构并未出现极端失衡的单一倾向。"
     )
-
 
     # 段落 2：日主与动力/制约
     p2 = (
         f"日主为{pillars.day_master}。就生成—制约关系而言，"
-        "生成链条未出现明显断裂，意味着人的内部动能较为连贯；"
-        "同时，制约性要素并不突出，外在压制压力相对有限。"
-        "因此，该命式的其风险多来自内部张力的管理方式，而非外部冲击。"
+        "整体生克链条并未呈现明显断裂，内部动能相对连贯；"
+        "同时，外在过度压制的信号并不突出。"
+        "在这种情形下，命式中的风险更多来自于如何管理自身的内在张力与取舍，"
+        "而非单一外在环境的强力打击。"
     )
 
     # 段落 3：天干十神（规范/资源）
@@ -283,55 +290,63 @@ def _compute_risk_band(features: Dict[str, Any]) -> Tuple[str, Dict[str, int]]:
         norm_bits.append("权威/规范维度（官杀）")
     if "正印" in tg_gan.values() or "偏印" in tg_gan.values():
         norm_bits.append("知识/正当性维度（印星）")
+
     if norm_bits:
         p3 = (
-            "天干层面显示出明显的趋势："
+            "天干层面显示出一定的制度化指向："
             + "与".join(norm_bits) +
-            "在关键位置出现。"
-            "该命式表现为对秩序、资格、名分或可被承认的路径更敏感。"
+            "在关键位置出现，"
+            "使得此命式在面对秩序、资格、名分或“可被承认的路径”时更为敏感，"
+            "也更在意是否获得来自体制或权威的认可。"
         )
     else:
         p3 = (
-            "天干层面未呈现强烈的制度化指向（如官杀或印星的显著集中），"
+            "天干层面未呈现出特别集中的制度化星曜（如官杀或印星的明显聚集），"
+            "其对规范与正当性的关注相对不那么突出，更依赖具体情境与个人选择来显化。"
         )
 
     # 段落 4：潜在张力（藏干）
     p4 = (
-       "藏干层面通常承载“隐性机制”。就该命式而言，"
-        "多重藏干的重复出现意味着该命式是一种“可讨论张力”：并非必然指向失衡，而是提示在规范与行动、稳定与竞争之间存在可调空间。"
+        "藏干通常被视为命式中的“隐性机制”。就本命式而言，"
+        "多重藏干的重复与组合，预示着在规范与行动、稳定与竞争之间，"
+        "存在一个可调节的张力区间。"
+        "这一张力并非必然走向失衡，而是提示在不同阶段与场景中，"
+        "有机会通过策略性选择来重新配置风险与机遇。"
     )
 
-    # 段落 5：吉凶总结（非决定论）
+    # 段落 5：吉凶总结（非决定论，带计算）
     band, risk_ev = _compute_risk_band(features)
-
     if band == "low":
-        risk_sentence = "整体偏向“中上格局”，吉性较稳，凶性风险在当前结构下属于可控范围。"
+        risk_sentence = (
+            "整体偏向“中上格局”，吉性力量相对充足且分布均衡，"
+            "凶性因素虽存在但未形成压倒性结构，在当前配置下属于“风险可控”的类型。"
+        )
     elif band == "medium":
         risk_sentence = (
-            "结构上呈现“中等偏稳”的格局，吉性与凶性力量相对拉锯，"
-            "在一般情境中仍可维持基本稳定，但在关键抉择或高压情境下，"
-            "隐性张力可能被放大，需要更有意识的调适。"
+            "结构上呈现“中等偏稳”的格局，吉性与凶性力量之间存在一定拉锯，"
+            "在日常情境下多能维持基本稳定；但在关键抉择或高压阶段，"
+            "若相关张力未被妥善调节，则更容易显化为起伏与波动。"
         )
     else:  # "high"
         risk_sentence = (
             "整体结构显示张力因素相对突出，吉性资源虽在但承压较大，"
-            "若缺乏足够的调节与支持，关键阶段更容易表现为波动与风险。"
+            "若欠缺足够的支持系统或自我调节机制，在关键阶段较易表现为不稳定与风险聚集。"
         )
 
     p5 = (
-        "综合五行区间、十神结构与隐性张力，该命式在结构上表现为："
+        "综合五行区间、十神结构与隐性张力的计算结果，本命式在结构上可以概括为："
         + risk_sentence +
-        "需要强调的是，这里的“吉/凶”并非对具体事件的预测，而是对结构条件的评估："
-        "当制度化资源与内部一致性能够被良好调度时，系统更容易呈现正向结果；"
-        "反之，若隐性张力在关键情境下被放大，则风险相应上升。"
+        "需要强调的是，这里的“吉/凶”并非对具体事件的直接预测，"
+        "而是对结构条件的分析：当制度化资源与内部一致性能够被良好调度时，"
+        "系统更可能呈现正向发展；反之，若隐性张力在关键情境下被放大，"
+        "则相应的风险水平也会随之上升。"
     )
-
 
     return "\n\n".join([p1, p2, p3, p4, p5])
 
 
 # =========================
-# 5) Streamlit UI（主输出：段落解释）
+# 6) Streamlit UI（主输出：段落解释）
 # =========================
 st.set_page_config(page_title="Bazi Algorithmic Model Demo", layout="wide")
 st.title("Bazi Algorithmic Religious Knowledge System — Demo")
@@ -339,7 +354,11 @@ st.title("Bazi Algorithmic Religious Knowledge System — Demo")
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    tz_name = st.selectbox("Time zone", ["Asia/Kuala_Lumpur", "Asia/Shanghai", "UTC"], index=0)
+    tz_name = st.selectbox(
+        "Time zone",
+        ["Asia/Kuala_Lumpur", "Asia/Shanghai", "UTC"],
+        index=0
+    )
 
     birth_date = st.date_input(
         "Birth date (Gregorian)",
@@ -392,7 +411,7 @@ if run:
     st.markdown(interpretation_text)
 
     with st.expander("Show computational details (Four Pillars / Features / Rules)"):
-        st.json(result)
+        st.json(result, expanded=False)
 
     st.subheader("Download JSON output")
     st.download_button(
@@ -401,4 +420,3 @@ if run:
         file_name="result.json",
         mime="application/json"
     )
-
